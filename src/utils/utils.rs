@@ -627,12 +627,26 @@ where
 }
 
 pub fn delete_dir_contents(dir_path: &Path) {
-    match remove_dir_all::remove_dir_all(dir_path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => {
-            panic!("Unable to clean up {}: {:?}", dir_path.display(), e);
+    // Deletes only the contents, and not the directory iteself (in
+    // case it's a mountpoint, or a symlink, or has unusual
+    // permissions which the user wants to preserve).
+    use anyhow::Context;
+    (|| {
+        let entries = match fs::read_dir(dir_path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            r => r,
         }
-        _ => {}
-    }
+        .context("checking directory")?;
+        for entry in entries {
+            let entry_path = entry.context("reading directory")?.path();
+            remove_dir_all::remove_dir_all(&entry_path)
+                .with_context(|| format!("removing {}", entry_path.display()))?;
+        }
+        Ok(())
+    })()
+    .unwrap_or_else(|e: anyhow::Error| {
+        panic!("Unable to clean up {}: {:?}", dir_path.display(), e)
+    });
 }
 
 pub struct FileReaderWithProgress<'a> {
